@@ -1,19 +1,20 @@
 package main
 
 import (
-	"fmt"
 	"context"
-	"time"
-	"testing"
-	"net/http"
 	"crypto/tls"
+	"fmt"
+	"net/http"
+	"testing"
+	"time"
 
-	"github.com/johnsiilver/keyvault"
+	"github.com/element-of-surprise/keyvault"
+	"log"
 )
 
 const (
 	clientID = "6d32e8c3-fec6-4f00-88eb-fe8d9427cbce"
-	vault = "keyvault-sdk-etoe"
+	vault    = "keyvault-sdk-etoe"
 
 	textSecret = "hello world"
 
@@ -36,7 +37,7 @@ func init() {
 func TestSecretGet(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	secret, err := client.Secrets().Get(ctx, "text-secret", "")
 	if err != nil {
@@ -45,16 +46,51 @@ func TestSecretGet(t *testing.T) {
 	if secret != textSecret {
 		t.Fatalf("TestSecretGet: got %q, want %q", secret, textSecret)
 	}
+
+	bundle, err := client.Secrets().Bundle(ctx, "text-secret", "")
+	if err != nil {
+		panic(err)
+	}
+}
+
+func TestList(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	secrets, err := client.Secrets().List(ctx, 100)
+	if err != nil {
+		t.Fatalf("TestList: got err == %s", err)
+	}
+
+	if len(secrets) < 1 {
+		t.Fatalf("TestList: got %d secrets, wanted >= 1", len(secrets))
+	}
+}
+
+func TestSecretVersions(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	versions, err := client.Secrets().Versions(ctx, "text-secret", 100)
+	if err != nil {
+		t.Fatalf("TestSecretVersions: got err == %s", err)
+	}
+
+	if len(versions) != 1 {
+		t.Fatalf("TestSecretVersions: got %d secrets, wanted 1", len(versions))
+	}
 }
 
 // TestServiceCert tests that we can grab a self-signed cert and then
 // use it to start a https server. We skip verification of the cert because
-// it is self-signed. 
+// it is self-signed.
 func TestServiceCertSelfSigned(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10 * time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	cert, err := client.TLS().ServiceCert(ctx, pkcs12SelfSigned, "", true)
 	if err != nil {
 		t.Fatalf("TestServiceCert: got err == %s, want err == nil", err)
@@ -63,11 +99,11 @@ func TestServiceCertSelfSigned(t *testing.T) {
 	addr := "127.0.0.1:42523"
 	cfg := &tls.Config{Certificates: []tls.Certificate{cert}}
 	srv := &http.Server{
-		Addr: addr,
+		Addr:         addr,
 		TLSConfig:    cfg,
 		ReadTimeout:  time.Minute,
 		WriteTimeout: time.Minute,
-		Handler: http.HandlerFunc(okHandler),
+		Handler:      http.HandlerFunc(okHandler),
 	}
 	go func() {
 		srv.ListenAndServeTLS("", "")
@@ -75,12 +111,12 @@ func TestServiceCertSelfSigned(t *testing.T) {
 
 	start := time.Now()
 	tr := &http.Transport{
-            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	client := &http.Client{Transport: tr}
 
 	for {
-		if time.Now().Sub(start) > 5 * time.Second{
+		if time.Now().Sub(start) > 5*time.Second {
 			break
 		}
 		var resp *http.Response

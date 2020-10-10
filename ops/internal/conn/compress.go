@@ -8,7 +8,7 @@ import (
 )
 
 // gzipCompress implements Compressor to allow compressing requests to the server.
-func gzipCompress(ctx context.Context, path string, headers http.Header, r io.Reader) (*http.Request, error) {
+func gzipCompress(ctx context.Context, ct CallType, path string, headers http.Header, r io.Reader) (*http.Request, error) {
 	pipeOut, pipeIn := io.Pipe()
 	w := gzip.NewWriter(pipeIn)
 
@@ -26,7 +26,7 @@ func gzipCompress(ctx context.Context, path string, headers http.Header, r io.Re
 		pipeIn.Close()
 	}()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", path, pipeOut)
+	req, err := http.NewRequestWithContext(ctx, string(ct), path, pipeOut)
 	if err != nil {
 		return nil, err
 	}

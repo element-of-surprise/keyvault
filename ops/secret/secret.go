@@ -3,20 +3,34 @@
 package secret
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
+	"net/url"
 	"strings"
-	"time"
-	"log"
+	//"strconv"
 
 	"github.com/element-of-surprise/keyvault/ops/internal/conn"
+	"github.com/element-of-surprise/keyvault/ops/values"
 )
 
 // DeletionRecoveryLevel indicates what level of recovery is associated with a particular secret.
 // Details at: https://docs.microsoft.com/en-us/rest/api/keyvault/getsecretversions/getsecretversions#deletionrecoverylevel
 type DeletionRecoveryLevel string
+
+func (d DeletionRecoveryLevel) MarshalJSON() ([]byte, error) {
+	return []byte(d), nil
+}
+
+func (d *DeletionRecoveryLevel) UnmarshalJSON(s []byte) error {
+	v := DeletionRecoveryLevel(strings.Trim(string(s), `"`))
+	if !validDeletionRecoveryLevel[v] {
+		return fmt.Errorf("%q is an unrecognized DeletionRecoveryLevel", v)
+	}
+	*d = v
+	return nil
+}
 
 const (
 	// Purgeable indicates soft-delete is not enabled for this vault. A DELETE operation results in immediate and
@@ -33,8 +47,15 @@ const (
 	RecoverablePurgeable DeletionRecoveryLevel = "Recoverable+Purgeable"
 )
 
-// Bundle is returned by Keyvault when accessing secrets.
-type Bundle struct {
+var validDeletionRecoveryLevel = map[DeletionRecoveryLevel]bool{
+	Purgeable:                        true,
+	Recoverable:                      true,
+	RecoverableProtectedSubscription: true,
+	RecoverablePurgeable:             true,
+}
+
+// Base contains the base attributes used in multiple return objects.
+type Base struct {
 	// Attributes are attributes tied to a Bundle.
 	Attributes *Attributes
 	// ContentType is a string that can optionally be set by a user to indicate the content type.
@@ -42,21 +63,48 @@ type Bundle struct {
 	ContentType string `json:"contentType"`
 	// ID is the secret"s ID.
 	ID string `json:"id"`
+	// Tags are application specific metadata in the form of key-value pairs.
+	Tags map[string]string `json:"tags"`
+}
+
+// Bundle is used to describe a secret.
+type Bundle struct {
+	*Base
+
 	// KID specifies the corresponding key backing the KV certificate. This is only set if this is a secret backing a KV certificate,
 	KID string `json:"kid"`
 	// Managed indicates if a secret"s lifetime is managed by keyvault.
 	// If this is a secret backing a certificate, this will be true.
 	Managed bool `json:"managed"`
-	// Tags are application specific metadata in the form of key-value pairs.
-	Tags map[string]string `json:"tags"`
 	// Value is the value of the secret.
 	// Note: Keyvault uses special secrets that are created when storing certificates with private keys. If this is the private key chain, this will be base64 encoded binary data.
 	Value string `json:"value"`
 }
 
+// Version describes a secret version.
+type Version struct {
+	*Base
+
+	// Managed indicates if a secret"s lifetime is managed by keyvault.
+	// If this is a secret backing a certificate, this will be true.
+	Managed bool `json:"managed"`
+}
+
+// DeletedBundle is returned when we delete a bundle.
+type DeletedBundle struct {
+	*Bundle
+
+	// DeleteDate is the time when the secret was deleted.
+	DeleteDate values.Time `json:"deletedDate"`
+	// RecoveryID is the url of the recovery object, used to identify and recover the deleted secret.
+	RecoveryID *values.URL `json:"recoveryId"`
+	// ScheduledPurgeDate is the time when the secret is scheduled to be purged.
+	ScheduledPurgeDate values.Time `json:"scheduledPurgeDate"`
+}
+
 // Attributes are attributes associated with this secret.
 type Attributes struct {
-	// RecoveryLevel the level of recovery for this password when deleted.  See the description of
+	// RecoveryLevel is the level of recovery for this password when deleted.  See the description of
 	// DeletionRecoveryLevel above.
 	RecoveryLevel DeletionRecoveryLevel `json:"recoveryLevel"`
 	// RecoverableDays is the soft delete data retention days. Must be >=7 and <=90, otherwise 0.
@@ -65,105 +113,13 @@ type Attributes struct {
 	Enabled bool `json:"enabled"`
 	// Created indicates the time the secret was created in UTC. If set to the zero value, it indicates
 	// this was not set.
-	Created time.Time `json:"created"`
+	Created *values.Time `json:"created"`
 	// NotBefore indicate that the key isn"t valid before this time in UTC. If set to the zero value, it indicates
 	// this was not set.
-	NotBefore time.Time `json:"nbf"`
+	NotBefore values.Time `json:"nbf"`
 	// Updated indicates the last time the secret was updated in UTC. If set to the zero value, it indicates
 	// this was not set.
-	Updated time.Time `json:"updated"`
-}
-
-// MarshalJSON implements json.Marshaller. This is not covered by any compatibility promise.
-func (s *Attributes) MarshalJSON() ([]byte, error) {
-	sa := struct {
-		RecoveryLevel   DeletionRecoveryLevel `json:"recoveryLevel"`
-		RecoverableDays int                   `json:"recoverableDays"`
-		Enabled         bool                  `json:"enabled"`
-		Created         int                   `json:"created"`
-		NotBefore       int                   `json:"nbf"`
-		Updated         int                   `json:"updated"`
-	}{
-		RecoveryLevel:   s.RecoveryLevel,
-		RecoverableDays: s.RecoverableDays,
-		Enabled:         s.Enabled,
-		Created:         int(s.Created.Unix()),
-		NotBefore:       int(s.NotBefore.Unix()),
-		Updated:         int(s.Updated.Unix()),
-	}
-
-	return json.Marshal(sa)
-}
-
-// saFields is a map of json names to the related struct field.
-// generated on startup so this is a one time operation.
-var saFields = map[string]reflect.StructField{}
-
-func init() {
-	t := reflect.TypeOf(Attributes{})
-	for i := 0; i < t.NumField(); i++ {
-		tag := t.Field(i).Tag.Get("json")
-		if tag == "" {
-			log.Println("empty tag")
-			continue
-		}
-		name := strings.Split(tag, ",")[0]
-		saFields[name] = t.Field(i)
-	}
-}
-
-// Unmarshal implements json.Unmarshaller. This is not covered by any compatibility promise.
-func (s *Attributes) UnmarshalJSON(b []byte) error {
-	if len(b) == 0 {
-		return nil
-	}
-
-	m := map[string]interface{}{}
-
-	if err := json.Unmarshal(b, &m); err != nil {
-		return fmt.Errorf("unabled to unmarshal Attributes: %w", err)
-	}
-
-	sa := reflect.ValueOf(s).Elem()
-
-	fieldWasSet := false
-	for k, i := range m {
-		// Lookup the json field name, if we don"t have it then its most likely a new field.
-		// We just skip it then, because our struct doesn"t support it.
-		sf := saFields[k]
-		if sf.Name == "" {
-			continue
-		}
-
-		// Ok, we need to do a conversion if the field is a time.Time.
-		switch sf.Type.Name(){
-		case "Time":
-			v, ok := i.(float64)
-			if !ok {
-				return fmt.Errorf("Attributes was unable to unmarshal field %q because it was storing a %T, not a float64", k, i)
-			}
-			if v == 0 {
-				continue
-			}
-			timer := time.Unix(int64(v), 0)
-			sa.FieldByName(sf.Name).Set(reflect.ValueOf(timer))
-			fieldWasSet = true
-			continue
-		case "DeletionRecoveryLevel":
-			fieldWasSet = true
-			sa.FieldByName(sf.Name).Set(reflect.ValueOf(DeletionRecoveryLevel(i.(string))))
-			continue
-		}
-
-		// All our other fields we can simply just set.
-		fieldWasSet = true
-		sa.FieldByName(sf.Name).Set(reflect.ValueOf(i))
-	}
-
-	if !fieldWasSet {
-		return fmt.Errorf("received a Attributes, but no fields decoded. Likely a bug in the decoder:\n%s", string(b))
-	}
-	return nil
+	Updated values.Time `json:"updated"`
 }
 
 // Client is a client for making calls to Secret operations on Keyvault.
@@ -190,8 +146,8 @@ type getSecretOpts struct {
 // Options is an optional argument to a call.
 type Option func(*callOpts, caller) error
 
-// Version provides the secret version for a call. Can be used in GetSecret().
-func Version(ver string) Option {
+// AtVersion provides the secret version for a call. Can be used in GetSecret().
+func AtVersion(ver string) Option {
 	return func(co *callOpts, caller caller) error {
 		switch caller {
 		case getSecretCaller:
@@ -220,6 +176,115 @@ func (c *Client) GetSecret(ctx context.Context, name string, options ...Option) 
 		path.WriteString("/" + co.getSecret.version)
 	}
 
-	err := c.Conn.Call(ctx, path.String(), nil, nil, &bundle)
+	err := c.Conn.Call(ctx, conn.Get, path.String(), nil, nil, &bundle)
+	return bundle, err
+}
+
+type listResult struct {
+	NextLink string    `json:"nextLink"`
+	Value    []Version `json:"value"`
+}
+
+// Versions returns a list of version information for a secret from the service.
+func (c *Client) Versions(ctx context.Context, name string, maxResults int32) ([]Version, error) {
+	if maxResults <= 0 {
+		maxResults = 25
+	}
+
+	versions := []Version{}
+
+	path := strings.Builder{}
+	path.WriteString("/secrets/" + name + "/versions")
+	for {
+		qv := url.Values{}
+		//qv.Add("maxresults", strconv.Itoa(int(maxResults)))
+
+		result := listResult{}
+		err := c.Conn.Call(ctx, conn.Get, path.String(), qv, nil, &result)
+		if err != nil {
+			return nil, fmt.Errorf("issue getting list of secret versions for %q: %w", name, err)
+		}
+		versions = append(versions, result.Value...)
+		if result.NextLink != "" {
+			path.Reset()
+			path.WriteString(result.NextLink)
+			continue
+		}
+		break
+	}
+	return versions, nil
+}
+
+// List returns a list of all secrets in the vault. We use the Version type, which is based on the SecretListResult type
+// in the REST API.
+func (c *Client) List(ctx context.Context, maxResults int32) ([]Version, error) {
+	if maxResults <= 0 {
+		maxResults = 25
+	}
+
+	versions := []Version{}
+
+	path := strings.Builder{}
+	path.WriteString("/secrets")
+	for {
+		qv := url.Values{}
+		//qv.Add("maxresults", strconv.Itoa(int(maxResults)))
+
+		result := listResult{}
+		err := c.Conn.Call(ctx, conn.Get, path.String(), qv, nil, &result)
+		if err != nil {
+			return nil, fmt.Errorf("issue getting list of secrets: %w", err)
+		}
+		versions = append(versions, result.Value...)
+		if result.NextLink != "" {
+			path.Reset()
+			path.WriteString(result.NextLink)
+			continue
+		}
+		break
+	}
+	return versions, nil
+}
+
+// SetRequest is used to request a new secret.
+type SetRequest struct {
+	// Attributes are attributes tied to a Bundle.
+	Attributes *Attributes
+	// ContentType is a string that can optionally be set by a user to indicate the content type.
+	// This is not a definitive content type given by the system.
+	ContentType string `json:"contentType"`
+	// Tags are application specific metadata in the form of key-value pairs.
+	Tags map[string]string `json:"tags"`
+	// Value is the value of the secret.
+	Value string
+}
+
+// Set creates a new secret or adds a new version if the named secret exists.
+func (c *Client) Set(ctx context.Context, name string, req SetRequest) (Bundle, error) {
+	bundle := Bundle{}
+	if req.Value == "" {
+		return bundle, fmt.Errorf("secret.SetRequest() request must provide a value")
+	}
+
+	path := strings.Builder{}
+	path.WriteString("/secrets/" + name)
+
+	b, err := json.Marshal(req)
+	if err != nil {
+		return bundle, fmt.Errorf("bug: ops.Secret.Set() cannot marshal a SetRequest: %w", err)
+	}
+
+	err = c.Conn.Call(ctx, conn.Put, path.String(), nil, bytes.NewBuffer(b), &bundle)
+	return bundle, err
+}
+
+// Delete deletes the named secret and returns information the deleted secret.
+func (c *Client) Delete(ctx context.Context, name string) (DeletedBundle, error) {
+	bundle := DeletedBundle{}
+
+	path := strings.Builder{}
+	path.WriteString("/secrets/" + name)
+
+	err := c.Conn.Call(ctx, conn.Delete, path.String(), nil, nil, &bundle)
 	return bundle, err
 }

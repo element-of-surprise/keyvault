@@ -7,10 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"reflect"
-	"log"
 
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/google/uuid"
@@ -40,10 +40,19 @@ func New(endpoint string, auth autorest.Authorizer) (*Conn, error) {
 	return c, nil
 }
 
+type CallType string
+
+const (
+	Get    CallType = "GET"
+	Put    CallType = "PUT"
+	Post   CallType = "POST"
+	Delete CallType = "DELETE"
+)
+
 // Call connects to the REST endpoint at path (the REST RPC path) passing the HTTP query values and JSON conversion
 // of body in the HTTP body. It automatically handles compression and decompression with gzip. The response is JSON
 // unmarshalled into resp. resp must be a pointer to a struct.
-func (c *Conn) Call(ctx context.Context, path string, queryValues url.Values, body interface{}, resp interface{}) error {
+func (c *Conn) Call(ctx context.Context, ct CallType, path string, queryValues url.Values, body interface{}, resp interface{}) error {
 	t := reflect.ValueOf(resp)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -62,11 +71,9 @@ func (c *Conn) Call(ctx context.Context, path string, queryValues url.Values, bo
 	if queryValues == nil {
 		queryValues = url.Values{}
 	}
-	// TODO(jdoak): They reject based on version. The version is based on date. This is actually
-	// not a great way to do this. No semantic versioning or telling that we are coming from Go
-	// and not .Net. So I'm faking .Net compatibility, but this is a API issue that should get
-	// resolved.
-	queryValues.Add("api-version", "2016-10-01")
+	// TODO(jdoak): They reject based on version.
+	// I'm faking .Net compatibility, but this is a API issue that should get resolved.
+	queryValues.Add("api-version", "7.1") //"2016-10-01"
 
 	header := http.Header{}
 	header.Add("Accept", "application/json")
@@ -79,17 +86,17 @@ func (c *Conn) Call(ctx context.Context, path string, queryValues url.Values, bo
 	var req *http.Request
 
 	if body == nil {
-		req, err = http.NewRequestWithContext(ctx, "GET", fullPath, nil)
+		req, err = http.NewRequestWithContext(ctx, string(ct), fullPath, nil)
 		if err != nil {
 			return fmt.Errorf("conn: new request creation error: %w", err)
 		}
 		req.Header = header
-	}else{
+	} else {
 		data, err = json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("bug: conn.Call(): could not marshal the body object: %w", err)
 		}
-		req, err = gzipCompress(ctx, fullPath, header, bytes.NewBuffer(data))
+		req, err = gzipCompress(ctx, ct, fullPath, header, bytes.NewBuffer(data))
 		if err != nil {
 			return err
 		}
@@ -110,6 +117,7 @@ func (c *Conn) Call(ctx context.Context, path string, queryValues url.Values, bo
 	if err != nil {
 		return fmt.Errorf("server response error: %w", err)
 	}
+	defer reply.Body.Close()
 
 	switch reply.Header.Get("Content-Encoding") {
 	case "gzip":
@@ -120,12 +128,30 @@ func (c *Conn) Call(ctx context.Context, path string, queryValues url.Values, bo
 		return fmt.Errorf("bug: conn.call(): content was send with unsupported content-encoding %s", reply.Header.Get("Content-Encoding"))
 	}
 
-	switch reply.StatusCode {
-	case 200, 201:
-	default:
-		return fmt.Errorf("reply status code was %d:\n%s", reply.StatusCode, string(data))
+	// Depending on what method is used to talk to Keyvault (why does no one just use post), we can get varying valid
+	// status codes.
+	switch ct {
+	case Get:
+		switch reply.StatusCode {
+		case 200, 201:
+		default:
+			return fmt.Errorf("reply status code was %d:\n%s", reply.StatusCode, string(data))
+		}
+	case Put:
+		if reply.StatusCode != 200 {
+			return fmt.Errorf("reply status code was %d:\n%s", reply.StatusCode, string(data))
+		}
+	case Delete:
+		if reply.StatusCode != 204 {
+			return fmt.Errorf("reply status code was %d:\n%s", reply.StatusCode, string(data))
+		}
+	case Post:
+		if reply.StatusCode != 200 {
+			return fmt.Errorf("reply status code was %d:\n%s", reply.StatusCode, string(data))
+		}
 	}
 
+	log.Println(string(data))
 	if err := json.Unmarshal(data, resp); err != nil {
 		return fmt.Errorf("json decode error: %w\nraw message was: %s", err, string(data))
 	}
