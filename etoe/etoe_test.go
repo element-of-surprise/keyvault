@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/element-of-surprise/keyvault"
-	"log"
+	//"log"
 )
 
 const (
@@ -39,17 +39,12 @@ func TestSecretGet(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	secret, err := client.Secrets().Get(ctx, "text-secret", "")
+	secret, _, err := client.Secrets().Get(ctx, "text-secret")
 	if err != nil {
 		t.Fatalf("TestSecretGet: got err == %s", err)
 	}
-	if secret != textSecret {
+	if string(secret) != textSecret {
 		t.Fatalf("TestSecretGet: got %q, want %q", secret, textSecret)
-	}
-
-	bundle, err := client.Secrets().Bundle(ctx, "text-secret", "")
-	if err != nil {
-		panic(err)
 	}
 }
 
@@ -83,6 +78,10 @@ func TestSecretVersions(t *testing.T) {
 	}
 }
 
+func TestSetDelete(t *testing.T) {
+
+}
+
 // TestServiceCert tests that we can grab a self-signed cert and then
 // use it to start a https server. We skip verification of the cert because
 // it is self-signed.
@@ -91,7 +90,7 @@ func TestServiceCertSelfSigned(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cert, err := client.TLS().ServiceCert(ctx, pkcs12SelfSigned, "", true)
+	cert, err := client.TLS().ServiceCert(ctx, pkcs12SelfSigned, keyvault.SCSkipVerify())
 	if err != nil {
 		t.Fatalf("TestServiceCert: got err == %s, want err == nil", err)
 	}

@@ -142,7 +142,9 @@ func (c *Conn) Call(ctx context.Context, ct CallType, path string, queryValues u
 			return fmt.Errorf("reply status code was %d:\n%s", reply.StatusCode, string(data))
 		}
 	case Delete:
-		if reply.StatusCode != 204 {
+		switch reply.StatusCode {
+		case 200, 204, 404:
+		default:
 			return fmt.Errorf("reply status code was %d:\n%s", reply.StatusCode, string(data))
 		}
 	case Post:

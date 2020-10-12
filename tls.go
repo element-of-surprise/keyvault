@@ -4,14 +4,13 @@ package keyvault
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 
 	mypkcs12 "github.com/johnsiilver/getcert/pkcs12"
 )
 
 // ArchiveFromat indicates what type of certificate archive format is used to encode a certificate.
-type ArchiveFormat int8
+type ArchiveFormat int
 
 const (
 	UnknownArchiveFormat               = 0
@@ -24,30 +23,75 @@ type TLS struct {
 	client *Client
 }
 
+type privateKeyOption struct {
+	version string
+}
+
+type PrivateKeyOption func(o *privateKeyOption)
+
+// PKVersion sets a specific secret to retrieve with PrivateKey().
+func PKVersion(version string) PrivateKeyOption {
+	return func(o *privateKeyOption) {
+		o.version = version
+	}
+}
+
 // PrivateKey returns the private key after it has been bases64 decoded.
 // If trying to use this with TLS for a net.HTTP server, ServerCert() is probably what you want.
-func (t TLS) PrivateKey(ctx context.Context, name, version string) (ArchiveFormat, []byte, error) {
-	bundle, err := t.client.Secrets().Bundle(ctx, name, version)
+func (t TLS) PrivateKey(ctx context.Context, name string, options ...PrivateKeyOption) (ArchiveFormat, []byte, error) {
+	co := privateKeyOption{}
+	for _, o := range options {
+		o(&co)
+	}
+
+	gopts := []GetOption{
+		Base64Decode(),
+	}
+	if co.version != "" {
+		gopts = append(gopts, GetVersion(co.version))
+	}
+
+	decoded, _, err := t.client.Secrets().Get(ctx, name, gopts...)
 	if err != nil {
 		return UnknownArchiveFormat, nil, err
 	}
 
-	data, err := base64.StdEncoding.DecodeString(bundle.Value)
-	if err != nil {
-		return UnknownArchiveFormat, nil, fmt.Errorf("problem base64 decoding our private key: %w", err)
-	}
-
 	// TODO(jdoak): Add detection of the ArchiveFormat.
-	return PKCS12, data, nil
+	return PKCS12, decoded, nil
+}
+
+type serviceCertOptions struct {
+	version    string
+	skipVerify bool
+}
+
+// ServiceCertOption is an optional argument for ServiceCert().
+type ServiceCertOption func(o *serviceCertOptions)
+
+// SCVersion specifies the cert version you want to use. Defaults to the latest.
+func SCVersion(version string) ServiceCertOption {
+	return func(o *serviceCertOptions) {
+		o.version = version
+	}
+}
+
+// SCSkipVerify skips verification of a certificate. This is useful when dealing with self-signed certificates which are
+// useful in testing scenarios. Be wary of this option in any other case, as you using a tls.Cerificate for content
+// you are sending that cannot be validated against a CA (meaning clients in non-mTLS scenarios cannot validate its you).
+// If your organization doesn't have a CA or you want simplified TLS certs, consider https://letsencrypt.org/.
+func SCSkipVerify() ServiceCertOption {
+	return func(o *serviceCertOptions) {
+		o.skipVerify = true
+	}
 }
 
 /*
-ServerCert returns a tls.Certificate that can be used to serve content over TLS. This may fail if the public certificate
+ServerCert returns a tls.Certificate that can be used to send content over TLS. This may fail if the public certificate
 chain does not adhere to some type of order.
 
-Here is a quick way to use the cert in your service(does not deal with TLS cert expirations):
+Here is a quick way to use the cert in a Golang HTTP server(does not deal with TLS cert expirations):
 
-	cert, err := kv.TLS().ServiceCert(ctx, "certname", LatestVersion)
+	cert, err := kv.TLS().ServiceCert(ctx, "certname")
 	if err != nil {
 		panic(err)
 	}
@@ -60,13 +104,22 @@ Here is a quick way to use the cert in your service(does not deal with TLS cert 
 	}
 	log.Fatal(srv.ListenAndServeTLS("", ""))
 */
-func (t TLS) ServiceCert(ctx context.Context, name, version string, skipVerify bool) (tls.Certificate, error) {
-	_, data, err := t.PrivateKey(ctx, name, version)
+func (t TLS) ServiceCert(ctx context.Context, name string, options ...ServiceCertOption) (tls.Certificate, error) {
+	co := serviceCertOptions{}
+	for _, o := range options {
+		o(&co)
+	}
+	pkopts := []PrivateKeyOption{}
+	if co.version != "" {
+		pkopts = append(pkopts, PKVersion(co.version))
+	}
+
+	_, data, err := t.PrivateKey(ctx, name, pkopts...)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("could not retrieve private key information for cert %q: %w", name, err)
 	}
 	// TODO(jdoak): Handle non-pkcs12 data.
-	_, _, tlsCert, err := mypkcs12.FromBytes(data, "", skipVerify)
+	_, _, tlsCert, err := mypkcs12.FromBytes(data, "", co.skipVerify)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("problems decoding private key(%s) in PKCS12 format: %w", name, err)
 	}

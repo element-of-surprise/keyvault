@@ -128,52 +128,15 @@ type Client struct {
 	Conn *conn.Conn
 }
 
-type caller int32
-
-const (
-	unknownCaller   = 0
-	getSecretCaller = 1
-)
-
-type callOpts struct {
-	getSecret getSecretOpts
-}
-
-type getSecretOpts struct {
-	version string
-}
-
-// Options is an optional argument to a call.
-type Option func(*callOpts, caller) error
-
-// AtVersion provides the secret version for a call. Can be used in GetSecret().
-func AtVersion(ver string) Option {
-	return func(co *callOpts, caller caller) error {
-		switch caller {
-		case getSecretCaller:
-			co.getSecret.version = ver
-			return nil
-		}
-		return fmt.Errorf("Version option is not supported in this call")
-	}
-}
-
 // GetSecret gets a secret with the name "name" from Keyvault. If you wish to get a secret at a certain version,
 // pass the Version() option.
-func (c *Client) GetSecret(ctx context.Context, name string, options ...Option) (Bundle, error) {
+func (c *Client) GetSecret(ctx context.Context, name string, version string) (Bundle, error) {
 	bundle := Bundle{}
-
-	co := callOpts{}
-	for _, o := range options {
-		if err := o(&co, getSecretCaller); err != nil {
-			return bundle, fmt.Errorf("GetSecret() call error: %w", err)
-		}
-	}
 
 	path := strings.Builder{}
 	path.WriteString("/secrets/" + name)
-	if co.getSecret.version != "" {
-		path.WriteString("/" + co.getSecret.version)
+	if version != "" {
+		path.WriteString("/" + version)
 	}
 
 	err := c.Conn.Call(ctx, conn.Get, path.String(), nil, nil, &bundle)
@@ -257,6 +220,10 @@ type SetRequest struct {
 	Tags map[string]string `json:"tags"`
 	// Value is the value of the secret.
 	Value string
+
+	// Base64Encode is not used in the JSON, it is used by a higher level
+	// package to determine if it should base64 encode the content.
+	Base64Encode bool `json:"-"`
 }
 
 // Set creates a new secret or adds a new version if the named secret exists.
