@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -15,11 +16,13 @@ func gzipCompress(ctx context.Context, ct CallType, path string, headers http.He
 	go func() {
 		_, err := io.Copy(w, r)
 		if err != nil {
+			log.Println("error on gzipCompress(io.Copy()): ", err)
 			pipeIn.CloseWithError(err)
 			w.Close()
 			return
 		}
 		if err := w.Close(); err != nil {
+			log.Println("error on gzip.Writer.Close(): ", err)
 			pipeIn.CloseWithError(err)
 			return
 		}
@@ -28,6 +31,7 @@ func gzipCompress(ctx context.Context, ct CallType, path string, headers http.He
 
 	req, err := http.NewRequestWithContext(ctx, string(ct), path, pipeOut)
 	if err != nil {
+		log.Println("error creating new HTTP request: ", err)
 		return nil, err
 	}
 	if headers != nil {

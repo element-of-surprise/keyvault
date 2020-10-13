@@ -46,6 +46,7 @@ const (
 	Get    CallType = "GET"
 	Put    CallType = "PUT"
 	Post   CallType = "POST"
+	Patch  CallType = "PATCH"
 	Delete CallType = "DELETE"
 )
 
@@ -78,7 +79,6 @@ func (c *Conn) Call(ctx context.Context, ct CallType, path string, queryValues u
 	header := http.Header{}
 	header.Add("Accept", "application/json")
 	header.Add("Accept-Encoding", "gzip")
-	header.Add("Content-Type", "application/json; charset=utf-8")
 	//header.Add("x-ms-client-version", "Keyvault.Go.Client: "+version.Keyvault)
 	header.Add("x-ms-client-request-id", "KGC.execute;"+uuid.New().String())
 
@@ -92,15 +92,24 @@ func (c *Conn) Call(ctx context.Context, ct CallType, path string, queryValues u
 		}
 		req.Header = header
 	} else {
+		// TODO(jdoak): In case your wondering why I'm not gzip encoding....
+		// Keyvault doesn't accept gzip and while we are allowing gzip decodes, it actually
+		// doesn't send in gzip either.
+		header.Add("Content-Type", "application/json; charset=utf-8")
 		data, err = json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("bug: conn.Call(): could not marshal the body object: %w", err)
 		}
-		req, err = gzipCompress(ctx, ct, fullPath, header, bytes.NewBuffer(data))
+		header.Add("Content-Length", fmt.Sprintf("%d", len(data)))
+		req, err = http.NewRequestWithContext(ctx, string(ct), fullPath, bytes.NewBuffer(data))
 		if err != nil {
 			return err
 		}
+		req.Header = header
+		log.Println("request body:\n", string(data))
 	}
+	log.Println("request: ", req)
+
 	u := req.URL
 	u.RawQuery = queryValues.Encode()
 	req.URL = u

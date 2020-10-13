@@ -23,14 +23,15 @@ type getOptions struct {
 // GetOption is an optional argument for the Get() or Bundle() call.
 type GetOption func(o *getOptions)
 
-// GetVersion specifies the particular version of a secret you want. By default this is the latest version.
-func GetVersion(version string) GetOption {
+// AtVersion specifies the particular version of a secret you want. By default this is the latest version.
+func AtVersion(version string) GetOption {
 	return func(o *getOptions) {
 		o.version = version
 	}
 }
 
-// Base64Decode indicates that data is binary, so it should be based64 decoded.
+// Base64Decode causes the string returned by Keyvault to be base64 decoded. This should be used when binary
+// data (such as a certificate private key) was stored and not a regular string.
 func Base64Decode() GetOption {
 	return func(o *getOptions) {
 		o.base64Decode = true
@@ -50,22 +51,22 @@ func (s Secrets) Get(ctx context.Context, name string, options ...GetOption) ([]
 	for _, o := range options {
 		o(&co)
 	}
-	bundle, err := s.client.Ops().Secrets().GetSecret(ctx, name, co.version)
+	bundle, err := s.client.Ops().Secrets().Get(ctx, name, co.version)
 	if err != nil {
 		return nil, bundle, err
 	}
 
-	var b []byte
+	var decoded []byte
 	if co.base64Decode {
-		b, err = base64.StdEncoding.DecodeString(bundle.Value)
+		decoded, err = base64.StdEncoding.DecodeString(bundle.Value)
 		if err != nil {
-			return nil, Bundle{}, fmt.Errorf("secret content could not be base64 decoded: %w", err)
+			return nil, Bundle{}, fmt.Errorf("Secrets.Get(%s): value could not be base64 decoded: %w", name, err)
 		}
 	} else {
-		b = []byte(bundle.Value)
+		decoded = []byte(bundle.Value)
 	}
 
-	return b, bundle, nil
+	return decoded, bundle, nil
 }
 
 // Versions returns a list of version information for a secret.
@@ -86,88 +87,180 @@ func (s Secrets) List(ctx context.Context, maxResults int32) ([]string, error) {
 	return out, nil
 }
 
-// SetOption provides an optional argument to the Set command.
-type SetOption func(req *secret.SetRequest)
+type caller int
 
-// ContentType sets the ContentType field to ct.
-func ContentType(ct string) SetOption {
-	return func(req *secret.SetRequest) {
-		req.ContentType = ct
+const (
+	unknownCaller caller = iota
+	set
+	update
+)
+
+type applier interface {
+	apply(caller caller, co interface{})
+}
+
+// applierFunc is an adapter that turns the wrapped function into
+// a CallOption. Implements CallOption.
+type applierFunc func(caller, interface{})
+
+func (c applierFunc) apply(caller caller, co interface{}) {
+	c(caller, co)
+}
+
+type ChangeOption interface {
+	applier
+
+	setOption()
+	updateOption()
+}
+
+// SetOption is an option for the Set() method.
+type SetOption interface {
+	applier
+	setOption()
+}
+
+// setOption implements applier and SetOption.
+type setOption struct {
+	applier
+}
+
+func (s setOption) setOption() {}
+
+// UpdateOption is an option for the UpdateAttr() method.
+type UpdateOption interface {
+	applier
+	updateOption()
+}
+
+// changeOption implememnts applier, SetOption and UpdateOption.
+type changeOption struct {
+	applier
+}
+
+func (c changeOption) setOption()    {}
+func (c changeOption) updateOption() {}
+
+// ContentType sets the ContentType field to ct. Implements SetOption and UpdateOption.
+func ContentType(ct string) ChangeOption {
+	return changeOption{
+		applier: applierFunc(
+			func(caller caller, co interface{}) {
+				co.(*secret.UpdateSetRequest).ContentType = ct
+			},
+		),
 	}
 }
 
-// Tags sets key/value pairs for the tags field of the secret.
-func Tags(tags map[string]string) SetOption {
-	return func(req *secret.SetRequest) {
-		req.Tags = tags
+// Tags sets key/value pairs for the tags field of the secret. Implements SetOption and UpdateOption.
+func Tags(tags map[string]string) ChangeOption {
+	return changeOption{
+		applier: applierFunc(
+			func(caller caller, co interface{}) {
+				co.(*secret.UpdateSetRequest).Tags = tags
+			},
+		),
 	}
 }
 
-// Recoverylevel sets the level of recovery for this password when deleted.
-func RecoveryLevel(drl secret.DeletionRecoveryLevel) SetOption {
-	return func(req *secret.SetRequest) {
-		if req.Attributes == nil {
-			req.Attributes = &secret.Attributes{}
-		}
-		req.Attributes.RecoveryLevel = drl
+// Recoverylevel sets the level of recovery for this password when deleted. Implements SetOption and UpdateOption.
+func RecoveryLevel(drl secret.DeletionRecoveryLevel) ChangeOption {
+	return changeOption{
+		applier: applierFunc(
+			func(caller caller, co interface{}) {
+				co.(*secret.UpdateSetRequest).Attributes.RecoveryLevel = drl
+			},
+		),
 	}
 }
 
 // RecoverableDays is the soft delete data retention. Must be set to
 // >=7 and <=90.
-func RecoverableDays(days int) SetOption {
-	return func(req *secret.SetRequest) {
-		if req.Attributes == nil {
-			req.Attributes = &secret.Attributes{}
-		}
-		req.Attributes.RecoverableDays = days
+func RecoverableDays(days int) ChangeOption {
+	return changeOption{
+		applier: applierFunc(
+			func(caller caller, co interface{}) {
+				co.(*secret.UpdateSetRequest).Attributes.RecoverableDays = days
+			},
+		),
 	}
 }
 
 // Enabled enables the secret.
-func Enabled() SetOption {
-	return func(req *secret.SetRequest) {
-		if req.Attributes == nil {
-			req.Attributes = &secret.Attributes{}
-		}
-		req.Attributes.Enabled = true
+func Enabled() ChangeOption {
+	return changeOption{
+		applier: applierFunc(
+			func(caller caller, co interface{}) {
+				co.(*secret.UpdateSetRequest).Attributes.Enabled = true
+			},
+		),
 	}
 }
 
 // NotBefore indiates that the key isn't valid before this time.
-func NotBefore(t time.Time) SetOption {
-	return func(req *secret.SetRequest) {
-		if req.Attributes == nil {
-			req.Attributes = &secret.Attributes{}
-		}
-		v := values.Time(t.UTC())
-		req.Attributes.NotBefore = v
+func NotBefore(t time.Time) ChangeOption {
+	return changeOption{
+		applier: applierFunc(
+			func(caller caller, co interface{}) {
+				v := values.Time(t.UTC())
+				co.(*secret.UpdateSetRequest).Attributes.NotBefore = v
+			},
+		),
 	}
 }
 
-// Base64Encode indicates that your value being set is binary data and
-// not string data, therefore it should be base64 encoded in order
-// to be stored correctly.
+// Base64Encode indicates that the value being passed to Set() represents binary data (not string data) and should be
+// encoded to allow for transport.
 func Base64Encode() SetOption {
-	return func(req *secret.SetRequest) {
-		req.Base64Encode = true
+	return setOption{
+		applier: applierFunc(
+			func(caller caller, co interface{}) {
+				co.(*secret.UpdateSetRequest).Base64Encode = true
+			},
+		),
 	}
 }
 
-// Set creates a new secret or adds a new version of a secret if it already exists.
+// Set creates a new secret or adds a new version of a secret if it already exists. SetOption is also implemented
+// by ChangeOption. If value does not represent a string (it represents binary data), you should pass Base64Encode().
 func (s Secrets) Set(ctx context.Context, name string, value []byte, options ...SetOption) error {
-	req := secret.SetRequest{}
+	req := secret.UpdateSetRequest{}
 	for _, o := range options {
-		o(&req)
+		o.apply(set, &req)
 	}
 
-	var v string
 	if req.Base64Encode {
-		v = base64.StdEncoding.EncodeToString(value)
+		req.Value = base64.StdEncoding.EncodeToString(value)
 	} else {
-		v = string(value)
+		req.Value = string(value)
 	}
-	req.Value = v
+
 	_, err := s.client.Ops().Secrets().Set(ctx, name, req)
-	return err
+	if err != nil {
+		return fmt.Errorf("Secrets().Set(%s) operation failed: %w", name, err)
+	}
+	return nil
+}
+
+// UpdateAttr updates a secret's attributes. UpdateOption is also implemented by ChangeOption.
+func (s Secrets) UpdateAttr(ctx context.Context, name, version string, options ...UpdateOption) error {
+	req := secret.UpdateSetRequest{}
+	for _, o := range options {
+		o.apply(update, &req)
+	}
+
+	_, err := s.client.Ops().Secrets().UpdateAttr(ctx, name, version, req)
+	if err != nil {
+		return fmt.Errorf("Secrets().UpdateAttr(%s) operation failed: %w", name, err)
+	}
+	return nil
+}
+
+// Delete deletes the secret with name "name".
+func (s Secrets) Delete(ctx context.Context, name string) error {
+	_, err := s.client.Ops().Secrets().Delete(ctx, name)
+	if err != nil {
+		return fmt.Errorf("Secrets.Delete(%s) operation failed: %w", name, err)
+	}
+	return nil
 }

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/element-of-surprise/keyvault"
-	//"log"
+	"log"
 )
 
 const (
@@ -24,6 +24,8 @@ const (
 var client *keyvault.Client
 
 func init() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	msi, err := keyvault.MSIAuth(clientID, keyvault.PublicCloud)
 	if err != nil {
 		panic(err)
@@ -44,7 +46,7 @@ func TestSecretGet(t *testing.T) {
 		t.Fatalf("TestSecretGet: got err == %s", err)
 	}
 	if string(secret) != textSecret {
-		t.Fatalf("TestSecretGet: got %q, want %q", secret, textSecret)
+		t.Fatalf("TestSecretGet: got %q, want %q", string(secret), textSecret)
 	}
 }
 
@@ -79,7 +81,22 @@ func TestSecretVersions(t *testing.T) {
 }
 
 func TestSetDelete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	val := []byte("hello world")
+	name := "setDeleteSecret"
+	err := client.Secrets().Set(ctx, name, val)
+	if err != nil {
+		t.Fatalf("TestSetDelete: got err == %s", err)
+	}
 
+	secret, _, err := client.Secrets().Get(ctx, name)
+	if err != nil {
+		t.Fatalf("TestSetDelete: got err == %s", err)
+	}
+	if string(secret) != string(val) {
+		t.Fatalf("TestSetDelete: got %q, want %q", string(secret), string(val))
+	}
 }
 
 // TestServiceCert tests that we can grab a self-signed cert and then

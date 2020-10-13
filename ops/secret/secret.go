@@ -3,9 +3,7 @@
 package secret
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -20,7 +18,7 @@ import (
 type DeletionRecoveryLevel string
 
 func (d DeletionRecoveryLevel) MarshalJSON() ([]byte, error) {
-	return []byte(d), nil
+	return []byte(fmt.Sprintf("%q", d)), nil
 }
 
 func (d *DeletionRecoveryLevel) UnmarshalJSON(s []byte) error {
@@ -57,7 +55,7 @@ var validDeletionRecoveryLevel = map[DeletionRecoveryLevel]bool{
 // Base contains the base attributes used in multiple return objects.
 type Base struct {
 	// Attributes are attributes tied to a Bundle.
-	Attributes *Attributes
+	Attributes Attributes
 	// ContentType is a string that can optionally be set by a user to indicate the content type.
 	// This is not a definitive content type given by the system.
 	ContentType string `json:"contentType"`
@@ -69,7 +67,7 @@ type Base struct {
 
 // Bundle is used to describe a secret.
 type Bundle struct {
-	*Base
+	Base
 
 	// KID specifies the corresponding key backing the KV certificate. This is only set if this is a secret backing a KV certificate,
 	KID string `json:"kid"`
@@ -77,13 +75,12 @@ type Bundle struct {
 	// If this is a secret backing a certificate, this will be true.
 	Managed bool `json:"managed"`
 	// Value is the value of the secret.
-	// Note: Keyvault uses special secrets that are created when storing certificates with private keys. If this is the private key chain, this will be base64 encoded binary data.
 	Value string `json:"value"`
 }
 
 // Version describes a secret version.
 type Version struct {
-	*Base
+	Base
 
 	// Managed indicates if a secret"s lifetime is managed by keyvault.
 	// If this is a secret backing a certificate, this will be true.
@@ -92,8 +89,23 @@ type Version struct {
 
 // DeletedBundle is returned when we delete a bundle.
 type DeletedBundle struct {
-	*Bundle
+	Bundle
 
+	// DeleteDate is the time when the secret was deleted.
+	DeleteDate values.Time `json:"deletedDate"`
+	// RecoveryID is the url of the recovery object, used to identify and recover the deleted secret.
+	RecoveryID *values.URL `json:"recoveryId"`
+	// ScheduledPurgeDate is the time when the secret is scheduled to be purged.
+	ScheduledPurgeDate values.Time `json:"scheduledPurgeDate"`
+}
+
+// Deleted is a deleted secret.
+type Deleted struct {
+	Base
+
+	// Managed indicates if a secret"s lifetime is managed by keyvault.
+	// If this is a secret backing a certificate, this will be true.
+	Managed bool `json:"managed"`
 	// DeleteDate is the time when the secret was deleted.
 	DeleteDate values.Time `json:"deletedDate"`
 	// RecoveryID is the url of the recovery object, used to identify and recover the deleted secret.
@@ -106,20 +118,20 @@ type DeletedBundle struct {
 type Attributes struct {
 	// RecoveryLevel is the level of recovery for this password when deleted.  See the description of
 	// DeletionRecoveryLevel above.
-	RecoveryLevel DeletionRecoveryLevel `json:"recoveryLevel"`
+	RecoveryLevel DeletionRecoveryLevel `json:"recoveryLevel,omitempty"`
 	// RecoverableDays is the soft delete data retention days. Must be >=7 and <=90, otherwise 0.
-	RecoverableDays int `json:"recoverableDays"`
+	RecoverableDays int `json:"recoverableDays,omitempty"`
 	// Enabled indicates if the secret is currently enabled.
-	Enabled bool `json:"enabled"`
+	Enabled bool `json:"enabled,omitempty"`
 	// Created indicates the time the secret was created in UTC. If set to the zero value, it indicates
 	// this was not set.
-	Created *values.Time `json:"created"`
+	Created *values.Time `json:"created,omitempty"`
 	// NotBefore indicate that the key isn"t valid before this time in UTC. If set to the zero value, it indicates
 	// this was not set.
-	NotBefore values.Time `json:"nbf"`
+	NotBefore values.Time `json:"nbf,omitempty"`
 	// Updated indicates the last time the secret was updated in UTC. If set to the zero value, it indicates
 	// this was not set.
-	Updated values.Time `json:"updated"`
+	Updated values.Time `json:"updated,omitempty"`
 }
 
 // Client is a client for making calls to Secret operations on Keyvault.
@@ -130,7 +142,7 @@ type Client struct {
 
 // GetSecret gets a secret with the name "name" from Keyvault. If you wish to get a secret at a certain version,
 // pass the Version() option.
-func (c *Client) GetSecret(ctx context.Context, name string, version string) (Bundle, error) {
+func (c *Client) Get(ctx context.Context, name string, version string) (Bundle, error) {
 	bundle := Bundle{}
 
 	path := strings.Builder{}
@@ -209,25 +221,24 @@ func (c *Client) List(ctx context.Context, maxResults int32) ([]Version, error) 
 	return versions, nil
 }
 
-// SetRequest is used to request a new secret.
-type SetRequest struct {
+// UpdateSetRequest is used to set a secret or update its attributes.
+type UpdateSetRequest struct {
 	// Attributes are attributes tied to a Bundle.
-	Attributes *Attributes
+	Attributes *Attributes `json:",omitempty"`
 	// ContentType is a string that can optionally be set by a user to indicate the content type.
 	// This is not a definitive content type given by the system.
-	ContentType string `json:"contentType"`
+	ContentType string `json:"contentType,omitempty"`
 	// Tags are application specific metadata in the form of key-value pairs.
-	Tags map[string]string `json:"tags"`
-	// Value is the value of the secret.
-	Value string
+	Tags map[string]string `json:"tags,omitempty"`
+	// Value is the value of the secret. Only valid in a Set.
+	Value string `json:"value,omitempty"`
 
-	// Base64Encode is not used in the JSON, it is used by a higher level
-	// package to determine if it should base64 encode the content.
+	// Base64Encode indicates to base64 encode the value.
 	Base64Encode bool `json:"-"`
 }
 
 // Set creates a new secret or adds a new version if the named secret exists.
-func (c *Client) Set(ctx context.Context, name string, req SetRequest) (Bundle, error) {
+func (c *Client) Set(ctx context.Context, name string, req UpdateSetRequest) (Bundle, error) {
 	bundle := Bundle{}
 	if req.Value == "" {
 		return bundle, fmt.Errorf("secret.SetRequest() request must provide a value")
@@ -236,12 +247,22 @@ func (c *Client) Set(ctx context.Context, name string, req SetRequest) (Bundle, 
 	path := strings.Builder{}
 	path.WriteString("/secrets/" + name)
 
-	b, err := json.Marshal(req)
-	if err != nil {
-		return bundle, fmt.Errorf("bug: ops.Secret.Set() cannot marshal a SetRequest: %w", err)
+	err := c.Conn.Call(ctx, conn.Put, path.String(), nil, req, &bundle)
+	return bundle, err
+}
+
+// UpdateAttr updates a secret's attributes.
+func (c *Client) UpdateAttr(ctx context.Context, name, version string, req UpdateSetRequest) (Bundle, error) {
+	bundle := Bundle{}
+
+	if version == "" {
+		return bundle, fmt.Errorf("UpdateAttr requires a version, passed empty string")
 	}
 
-	err = c.Conn.Call(ctx, conn.Put, path.String(), nil, bytes.NewBuffer(b), &bundle)
+	path := strings.Builder{}
+	path.WriteString(fmt.Sprintf("/secrets/%s/%s", name, version))
+
+	err := c.Conn.Call(ctx, conn.Patch, path.String(), nil, req, &bundle)
 	return bundle, err
 }
 
@@ -254,4 +275,50 @@ func (c *Client) Delete(ctx context.Context, name string) (DeletedBundle, error)
 
 	err := c.Conn.Call(ctx, conn.Delete, path.String(), nil, nil, &bundle)
 	return bundle, err
+}
+
+// Deleted returns information on a deleted secret.
+func (c *Client) Deleted(ctx context.Context, name string) (DeletedBundle, error) {
+	bundle := DeletedBundle{}
+
+	path := strings.Builder{}
+	path.WriteString("/deletedsecrets/" + name)
+
+	err := c.Conn.Call(ctx, conn.Get, path.String(), nil, nil, &bundle)
+	return bundle, err
+}
+
+type deletedListResult struct {
+	NextLink string    `json:"nextLink"`
+	Value    []Deleted `json:"value"`
+}
+
+// ListDeleted returns a list of deleted secrets.
+func (c *Client) ListDeleted(ctx context.Context, maxResults int32) ([]Deleted, error) {
+	if maxResults <= 0 {
+		maxResults = 25
+	}
+
+	deleted := []Deleted{}
+
+	path := strings.Builder{}
+	path.WriteString("/secrets")
+	for {
+		qv := url.Values{}
+		//qv.Add("maxresults", strconv.Itoa(int(maxResults)))
+
+		result := deletedListResult{}
+		err := c.Conn.Call(ctx, conn.Get, path.String(), qv, nil, &result)
+		if err != nil {
+			return nil, fmt.Errorf("issue getting list of deleted secrets: %w", err)
+		}
+		deleted = append(deleted, result.Value...)
+		if result.NextLink != "" {
+			path.Reset()
+			path.WriteString(result.NextLink)
+			continue
+		}
+		break
+	}
+	return deleted, nil
 }

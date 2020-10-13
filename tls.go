@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"strings"
 
 	mypkcs12 "github.com/johnsiilver/getcert/pkcs12"
 )
@@ -44,20 +45,26 @@ func (t TLS) PrivateKey(ctx context.Context, name string, options ...PrivateKeyO
 		o(&co)
 	}
 
-	gopts := []GetOption{
-		Base64Decode(),
-	}
+	gopts := []GetOption{Base64Decode()}
 	if co.version != "" {
-		gopts = append(gopts, GetVersion(co.version))
+		gopts = append(gopts, AtVersion(co.version))
 	}
 
-	decoded, _, err := t.client.Secrets().Get(ctx, name, gopts...)
+	decoded, bundle, err := t.client.Secrets().Get(ctx, name, gopts...)
 	if err != nil {
 		return UnknownArchiveFormat, nil, err
 	}
 
+	var af ArchiveFormat
+	switch strings.ToLower(bundle.ContentType) {
+	case "application/x-pkcs12":
+		af = PKCS12
+	case "application/x-pem-file":
+		af = PEM
+	}
+
 	// TODO(jdoak): Add detection of the ArchiveFormat.
-	return PKCS12, decoded, nil
+	return af, decoded, nil
 }
 
 type serviceCertOptions struct {
@@ -114,14 +121,20 @@ func (t TLS) ServiceCert(ctx context.Context, name string, options ...ServiceCer
 		pkopts = append(pkopts, PKVersion(co.version))
 	}
 
-	_, data, err := t.PrivateKey(ctx, name, pkopts...)
+	af, data, err := t.PrivateKey(ctx, name, pkopts...)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("could not retrieve private key information for cert %q: %w", name, err)
 	}
-	// TODO(jdoak): Handle non-pkcs12 data.
-	_, _, tlsCert, err := mypkcs12.FromBytes(data, "", co.skipVerify)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("problems decoding private key(%s) in PKCS12 format: %w", name, err)
+
+	var tlsCert tls.Certificate
+	switch af {
+	case PKCS12:
+		_, _, tlsCert, err = mypkcs12.FromBytes(data, "", co.skipVerify)
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("problems decoding private key(%s) in PKCS12 format: %w", name, err)
+		}
+	default:
+		return tlsCert, fmt.Errorf("ServiceCert does not support a cert in format %v", af)
 	}
 	return tlsCert, nil
 }
