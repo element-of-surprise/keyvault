@@ -7,6 +7,7 @@ import (
 
 	"github.com/element-of-surprise/keyvault/auth"
 	"github.com/element-of-surprise/keyvault/ops"
+	"github.com/element-of-surprise/keyvault/secrets"
 
 	aauth "github.com/Azure/go-autorest/autorest/azure/auth"
 )
@@ -70,12 +71,12 @@ func (c *Client) Ops() *ops.REST {
 	return c.ops
 }
 
-// Secrets returns an object for doing common Secrets operations.
-func (c *Client) Secrets() Secrets {
-	return Secrets{c}
+// Secrets returns an object for doing Secrets operations.
+func (c *Client) Secrets() secrets.Secrets {
+	return secrets.Secrets{c.ops}
 }
 
 // TLS returns an object for doing common TLS operations.
 func (c *Client) TLS() TLS {
-	return TLS{c}
+	return TLS{c.Secrets()}
 }

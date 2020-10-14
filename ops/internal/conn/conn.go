@@ -162,9 +162,11 @@ func (c *Conn) Call(ctx context.Context, ct CallType, path string, queryValues u
 		}
 	}
 
-	log.Println(string(data))
-	if err := json.Unmarshal(data, resp); err != nil {
-		return fmt.Errorf("json decode error: %w\nraw message was: %s", err, string(data))
+	if resp != nil {
+		log.Println(string(data))
+		if err := json.Unmarshal(data, resp); err != nil {
+			return fmt.Errorf("json decode error: %w\nraw message was: %s", err, string(data))
+		}
 	}
 	return nil
 }

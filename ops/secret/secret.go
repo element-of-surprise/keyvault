@@ -322,3 +322,47 @@ func (c *Client) ListDeleted(ctx context.Context, maxResults int32) ([]Deleted, 
 	}
 	return deleted, nil
 }
+
+// Backup returns a string representing a blob of all versions of a secret. This is in an undisclosed format.
+func (c *Client) Backup(ctx context.Context, name string) (string, error) {
+	path := strings.Builder{}
+	path.WriteString(fmt.Sprintf("/secrets/%s/backup", name))
+
+	result := struct{ Value string }{}
+
+	err := c.Conn.Call(ctx, conn.Post, path.String(), nil, nil, &result)
+	if err != nil {
+		return "", err
+	}
+	return result.Value, nil
+}
+
+// Purge permanently deletes a secret, without the possibility of recovery. Name is the name of a deleted secret.
+func (c *Client) Purge(ctx context.Context, name string) error {
+	path := strings.Builder{}
+	path.WriteString(fmt.Sprintf("/deletedsecrets/%s", name))
+
+	return c.Conn.Call(ctx, conn.Delete, path.String(), nil, nil, nil)
+}
+
+// Restore restores a key from the value passed. That value comes from a call to Backup().
+func (c *Client) Restore(ctx context.Context, value string) (Bundle, error) {
+	bundle := Bundle{}
+	path := strings.Builder{}
+	path.WriteString("/secrets/restore")
+
+	req := struct{ Value string }{Value: value}
+
+	err := c.Conn.Call(ctx, conn.Post, path.String(), nil, req, &bundle)
+	return bundle, err
+}
+
+// Recover recovers a deleted secret that has not been purged to the latest version.
+func (c *Client) Recover(ctx context.Context, name string) (Bundle, error) {
+	bundle := Bundle{}
+	path := strings.Builder{}
+	path.WriteString(fmt.Sprintf("/deletedsecrets/%s/recover", name))
+
+	err := c.Conn.Call(ctx, conn.Post, path.String(), nil, nil, &bundle)
+	return bundle, err
+}

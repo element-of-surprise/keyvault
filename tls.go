@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/element-of-surprise/keyvault/secrets"
+
 	mypkcs12 "github.com/johnsiilver/getcert/pkcs12"
 )
 
@@ -21,7 +23,7 @@ const (
 
 // TLS provides methods for extracting TLS certificates for use in TLS wrapped communication.
 type TLS struct {
-	client *Client
+	client secrets.Secrets
 }
 
 type privateKeyOption struct {
@@ -45,12 +47,12 @@ func (t TLS) PrivateKey(ctx context.Context, name string, options ...PrivateKeyO
 		o(&co)
 	}
 
-	gopts := []GetOption{Base64Decode()}
+	gopts := []secrets.GetOption{secrets.Base64Decode()}
 	if co.version != "" {
-		gopts = append(gopts, AtVersion(co.version))
+		gopts = append(gopts, secrets.AtVersion(co.version))
 	}
 
-	decoded, bundle, err := t.client.Secrets().Get(ctx, name, gopts...)
+	decoded, bundle, err := t.client.Get(ctx, name, gopts...)
 	if err != nil {
 		return UnknownArchiveFormat, nil, err
 	}
