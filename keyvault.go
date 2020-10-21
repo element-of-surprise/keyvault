@@ -1,3 +1,54 @@
+/*
+Package keyvault provides access to Azure's Keyvault service.
+
+For details on the keyvault service, see: https://azure.microsoft.com/en-us/services/key-vault/
+
+For general information on the XML API: https://docs.microsoft.com/en-us/rest/api/keyvault/
+
+Below are some examples of using common sub-packages. For more detailed 
+information, options and examples, see the individual packages.
+
+
+Creating a client with MSI authorizer
+
+To begin using this package, create an Authorizer and a client targeting your keyvault endpoint:
+	msi, err := keyvault.MSIAuth(msiClientID, keyvault.PublicCloud)
+	if err != nil {
+		// Do something
+	}
+
+	// This creates your client. The "vaultName" is a standin fo
+	// your unique vault name (not the FQDN).
+	client, err := keyvault.New("vaultName", keyvault.PublicCloud, msi)
+	if err != nil {
+		// Do something
+	}
+
+
+Accessing a text secret
+
+You can access a secret by accessing the secret package and calling a method:
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	secret, _, err := client.Secrets().Get(ctx, "text-secret")
+	if err != nil {
+		// Do something
+	}
+	fmt.Println(string(secret))
+
+
+Accessing a binary secret
+
+Some secrets represent binary data Base64 encoded. Retrieval is simple:
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	secret, _, err := client.Secrets().Get(ctx, "binary-secret", secrets.Base64Decode())
+	if err != nil {
+		// Do something
+	}
+*/
 package keyvault
 
 import (
@@ -8,6 +59,7 @@ import (
 	"github.com/element-of-surprise/keyvault/auth"
 	"github.com/element-of-surprise/keyvault/ops"
 	"github.com/element-of-surprise/keyvault/secrets"
+	"github.com/element-of-surprise/keyvault/tls"
 
 	aauth "github.com/Azure/go-autorest/autorest/azure/auth"
 )
@@ -77,6 +129,6 @@ func (c *Client) Secrets() secrets.Secrets {
 }
 
 // TLS returns an object for doing common TLS operations.
-func (c *Client) TLS() TLS {
-	return TLS{c.Secrets()}
+func (c *Client) TLS() tls.TLS {
+	return tls.TLS{SecretClient: c.Secrets()}
 }
