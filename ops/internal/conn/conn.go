@@ -160,6 +160,10 @@ func (c *Conn) Call(ctx context.Context, ct CallType, path string, queryValues u
 		if reply.StatusCode != 200 {
 			return fmt.Errorf("reply status code was %d:\n%s", reply.StatusCode, string(data))
 		}
+	case Patch:
+		if reply.StatusCode != 200 {
+			return fmt.Errorf("reply status code was %d\n%s", reply.StatusCode, string(data))
+		}
 	}
 
 	if resp != nil {

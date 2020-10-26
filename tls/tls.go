@@ -18,11 +18,11 @@ type ArchiveFormat int
 
 const (
 	// UnknownArchiveFormat indicates the archive format is unknown.
-	UnknownArchiveFormat               = 0
+	UnknownArchiveFormat = 0
 	// PCKS12 indicates the certificate is in the PKCS12 format.
-	PKCS12               ArchiveFormat = 1
+	PKCS12 ArchiveFormat = 1
 	// PEM indicates the certificate is in the PEM format.
-	PEM                  ArchiveFormat = 2
+	PEM ArchiveFormat = 2
 )
 
 // TLS provides methods for extracting TLS certificates for use in TLS wrapped communication.

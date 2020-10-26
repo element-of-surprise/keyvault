@@ -5,7 +5,7 @@ For details on the keyvault service, see: https://azure.microsoft.com/en-us/serv
 
 For general information on the XML API: https://docs.microsoft.com/en-us/rest/api/keyvault/
 
-Below are some examples of using common sub-packages. For more detailed 
+Below are some examples of using common sub-packages. For more detailed
 information, options and examples, see the individual packages.
 
 
@@ -48,6 +48,26 @@ Some secrets represent binary data Base64 encoded. Retrieval is simple:
 	if err != nil {
 		// Do something
 	}
+
+Retrieve a TLS cert for Golang webserver
+
+Getting a TLS cert to serve up for a Golang HTTP server is easy:
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// We automatically deal with PKCS12 or PEM decoding.
+	cert, _, err := client.TLS().ServiceCert(ctx, "certname")
+	if err != nil {
+		// Do something
+	}
+
+	cfg := &tls.Config{Certificates: []tls.Certificate{cert}}
+	srv := &http.Server{
+		TLSConfig:    cfg,
+		ReadTimeout:  time.Minute,
+		WriteTimeout: time.Minute,
+	}
+	log.Fatal(srv.ListenAndServeTLS("", ""))
 */
 package keyvault
 

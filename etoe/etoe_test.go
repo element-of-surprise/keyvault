@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/element-of-surprise/keyvault"
-	"log"
+	itls "github.com/element-of-surprise/keyvault/tls"
 )
 
 const (
@@ -107,7 +108,7 @@ func TestServiceCertSelfSigned(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cert, err := client.TLS().ServiceCert(ctx, pkcs12SelfSigned, keyvault.SCSkipVerify())
+	cert, err := client.TLS().ServiceCert(ctx, pkcs12SelfSigned, itls.SCSkipVerify())
 	if err != nil {
 		t.Fatalf("TestServiceCert: got err == %s, want err == nil", err)
 	}

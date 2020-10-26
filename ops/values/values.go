@@ -22,6 +22,10 @@ func (t Time) String() string {
 }
 
 func (t Time) MarshalJSON() ([]byte, error) {
+	u := time.Time(t).Unix()
+	if u < 0 {
+		return []byte("0"), nil
+	}
 	return []byte(strconv.FormatInt(time.Time(t).Unix(), 10)), nil
 }
 
